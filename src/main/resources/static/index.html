@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CounterDrone | Detection Dashboard</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <style>
+    :root{color-scheme:dark;--bg:#08111f;--panel:#101d30;--line:#24364d;--text:#edf4ff;--muted:#9db0c9;--cyan:#38d9ff;--green:#48e0a4}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px Arial,sans-serif}
+    header{display:flex;align-items:center;justify-content:space-between;padding:20px 5%;border-bottom:1px solid var(--line);background:#0b1728}
+    h1{font-size:21px;margin:0;letter-spacing:1px}h1 span{color:var(--cyan)}.sub{color:var(--muted);font-size:12px;margin-top:6px}
+    .status{border:1px solid #246c59;color:var(--green);border-radius:20px;padding:8px 12px;font-size:12px}
+    main{padding:24px 5%;max-width:1500px;margin:auto}.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:18px}
+    .card,.mapbox,.listbox,.notice{background:var(--panel);border:1px solid var(--line);border-radius:12px}
+    .card{padding:18px}.label{color:var(--muted);font-size:12px}.value{font-size:27px;font-weight:bold;margin-top:9px}
+    .layout{display:grid;grid-template-columns:minmax(0,2fr) minmax(280px,1fr);gap:16px}.mapbox{padding:14px}.paneltitle{font-weight:bold;margin:2px 0 12px}#map{height:490px;border-radius:8px;z-index:1}
+    .listbox{padding:16px;max-height:520px;overflow:auto}.track{padding:12px 0;border-bottom:1px solid var(--line)}.track:last-child{border:0}
+    .track strong{display:block;font-size:13px}.track small{display:block;color:var(--muted);margin-top:5px;line-height:1.5}
+    .notice{margin-top:16px;padding:13px 15px;color:#ffdc98;font-size:12px;line-height:1.6;border-color:#6c552b}
+    button{background:#11334a;border:1px solid #27617d;color:#eafaff;border-radius:8px;padding:9px 12px;cursor:pointer}
+    .maphead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:#122137;color:#edf4ff}
+    @media(max-width:850px){.layout{grid-template-columns:1fr}.cards{grid-template-columns:1fr}#map{height:380px}header{padding:16px 4%}}
+  </style>
+</head>
+<body>
+<header><div><h1><span>COUNTER</span>DRONE</h1><div class="sub">AI-BASED DETECTION &amp; THREAT MANAGEMENT · JAVA ENTERPRISE PROJECT</div></div><div class="status" id="connection">● CONNECTING</div></header>
+<main>
+  <div class="cards">
+    <div class="card"><div class="label">TRACKS RECEIVED</div><div class="value" id="count">—</div></div>
+    <div class="card"><div class="label">DATA SOURCE</div><div class="value" style="font-size:19px">OpenSky ADS-B</div></div>
+    <div class="card"><div class="label">LAST REFRESH</div><div class="value" id="updated" style="font-size:18px">Waiting…</div></div>
+  </div>
+  <div class="layout">
+    <section class="mapbox"><div class="maphead"><div class="paneltitle">Live aircraft map</div><button id="refresh">Refresh now</button></div><div id="map"></div></section>
+    <aside class="listbox"><div class="paneltitle">Latest tracked aircraft</div><div id="tracks" class="sub">Loading live data…</div></aside>
+  </div>
+  <div class="notice"><strong>Important data limitation:</strong> OpenSky provides aircraft position data using ADS-B/transponder signals; this is not a drone detection feed. Real drone tracking requires compatible Remote ID receivers or other authorized sensors. The dashboard does not invent drone detections or classify aircraft as threats.</div>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map=L.map('map').setView([20,0],2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OpenStreetMap contributors',maxZoom:18}).addTo(map);
+const markers=L.layerGroup().addTo(map);
+const el=id=>document.getElementById(id);
+function fmt(v,d=0){return v==null?'N/A':Number(v).toFixed(d)}
+async function refresh(){
+  el('connection').textContent='● FETCHING DATA';
+  try{
+    const response=await fetch('/api/aircraft',{cache:'no-store'});
+    if(!response.ok)throw new Error('API returned '+response.status);
+    const data=await response.json();
+    markers.clearLayers();
+    const tracks=data.tracks||[];
+    el('count').textContent=data.available?tracks.length:'Unavailable';
+    el('updated').textContent=new Date().toLocaleTimeString();
+    el('connection').textContent=data.available?'● LIVE FEED RESPONSE':'● FEED UNAVAILABLE';
+    el('connection').style.color=data.available?'#48e0a4':'#ffb0a0';
+    if(!data.available){el('tracks').textContent=data.message||'Live feed unavailable.';return}
+    const sorted=tracks.slice().sort((a,b)=>(a.callsign||a.icao24).localeCompare(b.callsign||b.icao24));
+    el('tracks').innerHTML=sorted.slice(0,60).map(t=>{
+      const title=escapeHtml(t.callsign||t.icao24||'Unknown aircraft');
+      const country=escapeHtml(t.originCountry||'Unknown origin');
+      return '<div class="track"><strong>'+title+'</strong><small>'+country+'<br>Lat '+fmt(t.latitude,3)+' · Lon '+fmt(t.longitude,3)+'<br>Altitude '+fmt(t.altitudeMeters)+' m · Speed '+fmt(t.velocityMetersPerSecond,1)+' m/s</small></div>';
+    }).join('')||'No aircraft with usable coordinates were returned.';
+    tracks.forEach(t=>{
+      const marker=L.circleMarker([t.latitude,t.longitude],{radius:5,color:'#38d9ff',fillColor:'#38d9ff',fillOpacity:.8,weight:1}).addTo(markers);
+      marker.bindPopup('<b>'+escapeHtml(t.callsign||t.icao24||'Aircraft')+'</b><br>'+escapeHtml(t.originCountry||'Unknown origin')+'<br>Altitude: '+fmt(t.altitudeMeters)+' m<br>Speed: '+fmt(t.velocityMetersPerSecond,1)+' m/s');
+    });
+  }catch(e){
+    el('connection').textContent='● FEED UNAVAILABLE';
+    el('connection').style.color='#ffb0a0';
+    el('count').textContent='—';el('updated').textContent=new Date().toLocaleTimeString();
+    el('tracks').textContent='Could not retrieve the live feed. Check deployment logs or try again later.';
+  }
+}
+function escapeHtml(v){return String(v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+el('refresh').addEventListener('click',refresh);refresh();setInterval(refresh,30000);
+</script>
+</body>
+</html>
